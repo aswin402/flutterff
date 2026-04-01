@@ -2,7 +2,7 @@
   <img src="file:///home/aswin/.gemini/antigravity/brain/355de1e2-f24f-481b-8827-a2fc5d7a19d0/flutterff_logo_1774989402062.png" width="180" alt="flutterff logo" />
   <h1>flutterff</h1>
   <p><b>Lightweight native Flutter web development launcher for Linux</b></p>
-  <code>v1.1.0</code>
+  <code>v1.5.0</code>
 </div>
 
 ---

@@ -234,7 +234,7 @@ def build_window(width, height):
 
     # ── Hot Reload button (r) ──
     reload_btn = Gtk.Button()
-    reload_btn.set_image(Gtk.Image.new_from_icon_name("weather-storm-symbolic", Gtk.IconSize.MENU))
+    reload_btn.set_image(Gtk.Image.new_from_icon_name("power-transmit-symbolic", Gtk.IconSize.MENU))
     reload_btn.set_tooltip_text("Hot Reload (r)")
     reload_btn.connect("clicked", on_hot_reload)
     hb.pack_end(reload_btn)

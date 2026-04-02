@@ -48,7 +48,7 @@ RED    = "\033[91m"
 RESET  = "\033[0m"
 BOLD   = "\033[1m"
 
-VERSION = "1.4.0"
+VERSION = "1.5.0"
 
 # ── device presets ────────────────────────────────────────────────────────────
 DEVICE_PRESETS = {
@@ -112,8 +112,32 @@ def load_url_in_gtk(url):
     global _current_url
     _current_url = url
     if _webview:
-        _webview.load_uri(url)
+        # retry until Flutter is actually serving — avoids white screen
+        _try_load_url(url, retries=15, delay=800)
     return False
+
+def _try_load_url(url, retries, delay):
+    """Try to connect to the Flutter server, retry if not ready yet."""
+    def attempt(remaining):
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            s.settimeout(1)
+            # parse port from url
+            port = int(url.split(":")[2].split("/")[0].split("?")[0])
+            s.connect(("127.0.0.1", port))
+            s.close()
+            # server is up — load it
+            if _webview:
+                _webview.load_uri(url)
+            print(f"{GREEN}✔ Flutter server ready — loaded{RESET}")
+        except Exception:
+            if remaining > 0:
+                print(f"{YELLOW}Waiting for Flutter server... ({remaining} retries left){RESET}")
+                GLib.timeout_add(delay, lambda: attempt(remaining - 1) or False)
+            else:
+                print(f"{RED}Flutter server did not respond — try reloading manually{RESET}")
+        return False
+    attempt(retries)
 
 def quit_gtk():
     Gtk.main_quit()
@@ -145,7 +169,7 @@ def on_hot_restart(_btn):
 
 def reload_webview():
     if _webview and _current_url:
-        _webview.load_uri(_current_url)
+        _try_load_url(_current_url, retries=10, delay=500)
     return False  # don't repeat
 
 # ── flutter watcher ───────────────────────────────────────────────────────────
@@ -210,14 +234,14 @@ def build_window(width, height):
 
     # ── Hot Reload button (r) ──
     reload_btn = Gtk.Button()
-    reload_btn.set_image(Gtk.Image.new_from_icon_name("view-refresh-symbolic", Gtk.IconSize.MENU))
+    reload_btn.set_image(Gtk.Image.new_from_icon_name("power-transmit-symbolic", Gtk.IconSize.MENU))
     reload_btn.set_tooltip_text("Hot Reload (r)")
     reload_btn.connect("clicked", on_hot_reload)
     hb.pack_end(reload_btn)
 
     # ── Hot Restart button (R) ──
     restart_btn = Gtk.Button()
-    restart_btn.set_image(Gtk.Image.new_from_icon_name("system-reboot-symbolic", Gtk.IconSize.MENU))
+    restart_btn.set_image(Gtk.Image.new_from_icon_name("view-refresh-symbolic", Gtk.IconSize.MENU))
     restart_btn.set_tooltip_text("Hot Restart (R)")
     restart_btn.connect("clicked", on_hot_restart)
     hb.pack_end(restart_btn)
@@ -338,6 +362,10 @@ def main():
         flutter_cmd += ["--flavor", args.flavor]
     if offline:
         flutter_cmd.append("--no-pub")
+        # Flutter 3.29+ removed HTML renderer — only CanvasKit remains
+        # --no-web-resources-cdn stops Flutter fetching CanvasKit from CDN
+        # so it uses the locally cached copy bundled with the Flutter SDK instead
+        flutter_cmd.append("--no-web-resources-cdn")
 
     # ── startup info ───────────────────────────────────────────────────────────
     print(f"\n{BOLD}{CYAN}🦊 flutterff v{VERSION}{RESET}")

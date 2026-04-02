@@ -1,9 +1,10 @@
-<div align="center">
-  <img src="file:///home/aswin/.gemini/antigravity/brain/355de1e2-f24f-481b-8827-a2fc5d7a19d0/flutterff_logo_1774989402062.png" width="180" alt="flutterff logo" />
-  <h1>flutterff</h1>
-  <p><b>Lightweight native Flutter web development launcher for Linux</b></p>
-  <code>v1.1.0</code>
-</div>
+# flutterff
+
+![flutterff logo](asset/logo.png)
+
+**Lightweight native Flutter web development launcher for Linux**
+
+`v1.5.0`
 
 ---
 
@@ -14,8 +15,14 @@
 - ❌ **Native Close Button**: Standard window controls for a desktop feel.
 - 📱 **Integrated Size Selector**: Change device sizes (Mobile, iPhone, Tablet) instantly via a dropdown menu.
 - 🚀 **Performance**: Extremely low RAM usage compared to a full browser.
-- 🛠️ **Flutter Focused**: Auto-loads your Flutter web server, supports Hot Reload, and handles common development ports.
+- ⚡ **Hot Reload & Restart**: Dedicated header bar buttons for instant updates.
+- 🛠️ **Flutter Focused**: Auto-loads your Flutter web server and handles common development ports.
 - 🗔 **Draggable & Resizable**: Move the window anywhere; change sizes on the fly.
+
+# Images
+
+![image](screenshots/image.png)
+![resizemenu](screenshots/resizemenu.png)
 
 ## 🛠️ Prerequisites
 Before running `flutterff`, ensure you have the necessary GTK and WebKit libraries installed:
@@ -46,7 +53,9 @@ flutterff --profile        # Run in Flutter profile mode
 - **Drag**: Click and drag the header bar at the top.
 - **Resize**: Click the "Maximize" icon in the header bar to pick a new size.
 - **Exit**: Click the Close (X) button or press `Ctrl + C` in your terminal.
-- **Hot Reload**: Press `r` in the terminal while `flutterff` is running.
+- ⚡ **Hot Reload**: Press `r` in the terminal or click the lightning bolt in the header bar.
+- 🔄 **Hot Restart**: Press `R` in the terminal or click the refresh icon in the header bar.
 
 ---
-<p align="center">Made for Flutter developers who value performance and desktop integration.</p>
+
+_Made for Flutter developers who value performance and desktop integration._

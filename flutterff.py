@@ -2,7 +2,6 @@
 """
 flutterff - Flutter web dev launcher
 Opens a native borderless mobile window using GTK + WebKit2 directly.
-Includes a custom header bar for window dragging, resizing, and closing.
 
 Requires:
     python3-gi gir1.2-webkit2-4.1 gir1.2-gtk-3.0
@@ -14,7 +13,7 @@ Usage:
     flutterff --profile        # less RAM, no debug overhead
     flutterff --offline        # force offline mode
     flutterff --list-sizes     # show all presets
-    flutterff --port 3000      # custom port (auto-finds free port if taken)
+    flutterff --port 3000      # custom port
 """
 
 import subprocess
@@ -24,9 +23,8 @@ import threading
 import argparse
 import signal
 import socket
-import os
+from datetime import datetime
 
-# ── deps check ────────────────────────────────────────────────────────────────
 try:
     import gi
     try:
@@ -34,7 +32,7 @@ try:
     except ValueError:
         gi.require_version("WebKit2", "4.0")
     gi.require_version("Gtk", "3.0")
-    from gi.repository import Gtk, WebKit2, GLib, Gio
+    from gi.repository import Gtk, WebKit2, GLib
 except ImportError:
     print("\n[flutterff] python3-gi or WebKit2 not found.")
     print("Run:  sudo apt install python3-gi gir1.2-gtk-3.0 gir1.2-webkit2-4.1\n")
@@ -45,12 +43,13 @@ GREEN  = "\033[92m"
 YELLOW = "\033[93m"
 CYAN   = "\033[96m"
 RED    = "\033[91m"
+BLUE   = "\033[94m"
 RESET  = "\033[0m"
 BOLD   = "\033[1m"
+DIM    = "\033[2m"
 
-VERSION = "1.5.0"
+VERSION = "1.9.0"
 
-# ── device presets ────────────────────────────────────────────────────────────
 DEVICE_PRESETS = {
     "mobile":       (412, 915),
     "mobile-small": (360, 800),
@@ -59,20 +58,83 @@ DEVICE_PRESETS = {
     "desktop":      (1280, 800),
 }
 
-# ── globals ───────────────────────────────────────────────────────────────────
 _flutter      = None
 _window       = None
 _webview      = None
-_current_url  = None   # track last loaded URL for reload button
+_current_url  = None
 _flutter_lock = threading.Lock()
 
+_ANSI = re.compile(r'\x1b\[[0-9;]*m')
+
+def _strip(t): return _ANSI.sub('', t).strip()
+def _ts():     return datetime.now().strftime("%H:%M:%S")
+
+# ── log levels ─────────────────────────────────────────────────────────────────
+def _detect_level(text):
+    lo = text.lower()
+    if any(x in lo for x in ["error:", "exception:", "fatal:", "unhandled"]):
+        return "ERR", RED
+    elif any(x in lo for x in ["warning:", "warn:", "deprecated"]):
+        return "WRN", YELLOW
+    elif any(x in lo for x in ["debug:"]):
+        return "DBG", DIM
+    else:
+        return "INF", BLUE
+
+def format_flutter_log(raw: str, source="flutter"):
+    """
+    Ultra-clean logging:
+    - ONLY show Flutter logs
+    - Kill ALL browser/WebKit noise
+    """
+
+    # 🔥 HARD KILL (raw, before processing)
+    lo_raw = raw.lower()
+    if (
+        "http://" in lo_raw or
+        "https://" in lo_raw or
+        ".js:" in lo_raw or
+        "console" in lo_raw or
+        "flutter_bootstrap" in lo_raw or
+        "ddc_module_loader" in lo_raw or
+        "dart_sdk" in lo_raw or
+        "web_entrypoint" in lo_raw
+    ):
+        return None
+
+    text = _strip(raw)
+    if not text:
+        return None
+
+    lo = text.lower()
+    ts = _ts()
+
+    # ✅ ONLY Flutter logs
+    if "flutter:" in lo:
+        msg = re.split(r'flutter:\s*', text, flags=re.IGNORECASE)[-1].strip()
+        if not msg:
+            return None
+
+        tag, color = _detect_level(msg)
+        return f"{ts}  {color}{tag}{RESET}  {msg}"
+
+    # ✅ webview JS logs (direct print() from user)
+    if source == "webview":
+        tag, color = _detect_level(text)
+        return f"{ts}  {color}{tag}{RESET}  {text}"
+
+    # ✅ errors (optional keep)
+    if any(x in lo for x in ["error:", "exception:", "fatal:", "══╡", "══╞"]):
+        return f"{ts}  {RED}ERR{RESET}  {text}"
+
+    return None
 # ── helpers ───────────────────────────────────────────────────────────────────
 def parse_size(size_str):
     try:
         w, h = size_str.lower().split("x")
         return int(w), int(h)
     except Exception:
-        print(f"{RED}Invalid size '{size_str}'. Use WxH e.g. 390x844{RESET}")
+        print(f"{RED}invalid size '{size_str}' — use WxH e.g. 390x844{RESET}")
         sys.exit(1)
 
 def check_online():
@@ -86,16 +148,16 @@ def check_online():
         return False
 
 def find_free_port(start=8080, end=8200):
-    for port in range(start, end):
+    for p in range(start, end):
         try:
             s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            s.bind(("0.0.0.0", port))
+            s.bind(("0.0.0.0", p))
             s.close()
-            return port
+            return p
         except OSError:
             continue
-    print(f"{RED}No free port found between {start}-{end}{RESET}")
+    print(f"{RED}no free port found between {start}-{end}{RESET}")
     sys.exit(1)
 
 def is_port_free(port):
@@ -112,30 +174,23 @@ def load_url_in_gtk(url):
     global _current_url
     _current_url = url
     if _webview:
-        # retry until Flutter is actually serving — avoids white screen
         _try_load_url(url, retries=15, delay=800)
     return False
 
 def _try_load_url(url, retries, delay):
-    """Try to connect to the Flutter server, retry if not ready yet."""
     def attempt(remaining):
         try:
             s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             s.settimeout(1)
-            # parse port from url
             port = int(url.split(":")[2].split("/")[0].split("?")[0])
             s.connect(("127.0.0.1", port))
             s.close()
-            # server is up — load it
             if _webview:
                 _webview.load_uri(url)
-            print(f"{GREEN}✔ Flutter server ready — loaded{RESET}")
+            # Don't print server ready - it's suppressed anyway
         except Exception:
             if remaining > 0:
-                print(f"{YELLOW}Waiting for Flutter server... ({remaining} retries left){RESET}")
                 GLib.timeout_add(delay, lambda: attempt(remaining - 1) or False)
-            else:
-                print(f"{RED}Flutter server did not respond — try reloading manually{RESET}")
         return False
     attempt(retries)
 
@@ -143,34 +198,31 @@ def quit_gtk():
     Gtk.main_quit()
     return False
 
-# ── flutter stdin helpers ─────────────────────────────────────────────────────
+# ── flutter stdin ─────────────────────────────────────────────────────────────
 def send_flutter_key(key: str):
-    """Send a keypress to Flutter's stdin (r = hot reload, R = hot restart)."""
     global _flutter
     with _flutter_lock:
         if _flutter and _flutter.poll() is None:
             try:
                 _flutter.stdin.write(key.encode())
                 _flutter.stdin.flush()
-                print(f"{CYAN}► Sent '{key}' to Flutter{RESET}")
+                label = "hot reload" if key == "r" else "hot restart"
+                print(f"{_ts()}  {CYAN}HOT{RESET}  {label}")
             except Exception as e:
-                print(f"{RED}Failed to send key: {e}{RESET}")
+                print(f"{_ts()}  {RED}ERR{RESET}  key send failed: {e}")
 
 def on_hot_reload(_btn):
-    """Hot reload — press r then reload the webview."""
     send_flutter_key("r")
-    # give flutter a moment to recompile then reload webview
     GLib.timeout_add(800, reload_webview)
 
 def on_hot_restart(_btn):
-    """Hot restart — press R then reload the webview."""
     send_flutter_key("R")
     GLib.timeout_add(1500, reload_webview)
 
 def reload_webview():
     if _webview and _current_url:
         _try_load_url(_current_url, retries=10, delay=500)
-    return False  # don't repeat
+    return False
 
 # ── flutter watcher ───────────────────────────────────────────────────────────
 def run_flutter(cmd, port):
@@ -183,35 +235,42 @@ def run_flutter(cmd, port):
         _flutter = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            stdin=subprocess.PIPE,   # ← PIPE so we can send r/R
+            stderr=subprocess.PIPE,
+            stdin=subprocess.PIPE,
+            text=True,
+            bufsize=1
         )
     except FileNotFoundError:
-        print(f"{RED}Flutter not found! Make sure 'flutter' is in your PATH.{RESET}")
+        print(f"{_ts()}  {RED}ERR{RESET}  flutter not found — check PATH")
         GLib.idle_add(quit_gtk)
         return
 
-    for line in iter(_flutter.stdout.readline, b''):
-        try:
-            text = line.decode("utf-8", errors="replace").rstrip()
-        except Exception:
-            continue
+    def _read_stderr(proc):
+        for line in proc.stderr:
+            out = format_flutter_log(line)
+            if out:
+                print(out, flush=True)
 
-        print(text)
+    threading.Thread(target=_read_stderr, args=(_flutter,), daemon=True).start()
 
+    for line in _flutter.stdout:
+        # URL detection before formatting
         if not url_loaded:
-            match = lib_pattern.search(text)
-            found_url = None
-
-            if match:
-                found_url = match.group(1)
-            elif port and ("serving" in text.lower() or "listening" in text.lower()):
-                found_url = f"http://localhost:{port}"
-
+            match = lib_pattern.search(line)
+            found_url = match.group(1) if match else None
+            if not found_url and port:
+                lo = line.lower()
+                if "serving" in lo or "listening" in lo:
+                    found_url = f"http://localhost:{port}"
             if found_url:
                 url_loaded = True
-                print(f"\n{GREEN}{BOLD}✔ Flutter ready — loading:{RESET} {CYAN}{found_url}{RESET}\n")
+                print(f"{_ts()}  {GREEN}SRV{RESET}  serving on :{port}")
                 GLib.idle_add(load_url_in_gtk, found_url)
+                continue
+
+        out = format_flutter_log(line)
+        if out:
+            print(out)
 
     _flutter.wait()
     GLib.idle_add(quit_gtk)
@@ -225,30 +284,33 @@ def build_window(width, height):
     win.set_default_size(width, height)
     win.set_resizable(True)
 
-    # ── Header Bar ──
     hb = Gtk.HeaderBar()
     hb.set_show_close_button(True)
     hb.set_title("flutterff")
     hb.set_decoration_layout("menu:close")
     win.set_titlebar(hb)
 
-    # ── Hot Reload button (r) ──
+    # hot reload — lightning bolt unicode
     reload_btn = Gtk.Button()
-    reload_btn.set_label("🗲")  # ☇ U+2607 LIGHTNING (hot reload)
+    reload_lbl = Gtk.Label()
+    reload_lbl.set_markup("<span size='large'>\u26a1</span>")  # ⚡
+    reload_btn.add(reload_lbl)
     reload_btn.set_tooltip_text("Hot Reload (r)")
     reload_btn.connect("clicked", on_hot_reload)
     hb.pack_end(reload_btn)
 
-    # ── Hot Restart button (R) ──
+    # hot restart — refresh icon
     restart_btn = Gtk.Button()
-    restart_btn.set_image(Gtk.Image.new_from_icon_name("view-refresh-symbolic", Gtk.IconSize.MENU))
+    restart_btn.set_image(
+        Gtk.Image.new_from_icon_name("view-refresh-symbolic", Gtk.IconSize.MENU))
     restart_btn.set_tooltip_text("Hot Restart (R)")
     restart_btn.connect("clicked", on_hot_restart)
     hb.pack_end(restart_btn)
 
-    # ── Size Selector ──
+    # size selector
     size_btn = Gtk.MenuButton()
-    size_btn.set_image(Gtk.Image.new_from_icon_name("view-fullscreen-symbolic", Gtk.IconSize.MENU))
+    size_btn.set_image(
+        Gtk.Image.new_from_icon_name("view-fullscreen-symbolic", Gtk.IconSize.MENU))
     size_btn.set_tooltip_text("Change Device Size")
     menu = Gtk.Menu()
     for name, (w, h) in DEVICE_PRESETS.items():
@@ -259,12 +321,55 @@ def build_window(width, height):
     size_btn.set_popup(menu)
     hb.pack_start(size_btn)
 
-    # ── WebView ──
+    # webview
     context = WebKit2.WebContext.get_default()
     context.set_cache_model(WebKit2.CacheModel.DOCUMENT_VIEWER)
+    settings = WebKit2.Settings()
+    settings.set_enable_write_console_messages_to_stdout(False)
+    settings.set_enable_developer_extras(True)
+
+    # intercept console messages via UserContentManager
+    manager = WebKit2.UserContentManager()
+    manager.register_script_message_handler("flutterLog")
+
+    def _on_script_message(_manager, js_result):
+        """Handle console messages forwarded from injected JS."""
+        try:
+            msg = js_result.get_js_value().to_string()
+        except Exception:
+            return
+        if msg:
+            out = format_flutter_log(msg, source="webview")
+            if out:
+                print(out, flush=True)
+
+    manager.connect("script-message-received::flutterLog", _on_script_message)
+
+    # inject JS to override console methods and forward to Python
+    console_override = WebKit2.UserScript(
+        """
+        (function() {
+            ['log', 'warn', 'error', 'info', 'debug'].forEach(function(level) {
+                var orig = console[level];
+                console[level] = function() {
+                    var msg = Array.prototype.slice.call(arguments).join(' ');
+                    try {
+                        window.webkit.messageHandlers.flutterLog.postMessage(msg);
+                    } catch(e) {}
+                    orig.apply(console, arguments);
+                };
+            });
+        })();
+        """,
+        WebKit2.UserContentInjectedFrames.ALL_FRAMES,
+        WebKit2.UserScriptInjectionTime.START,
+        None, None
+    )
+    manager.add_script(console_override)
 
     vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
-    webview = WebKit2.WebView()
+    webview = WebKit2.WebView.new_with_user_content_manager(manager)
+    webview.set_settings(settings)
     webview.connect("context-menu", lambda *a: True)
     webview.load_uri("about:blank")
     vbox.pack_start(webview, True, True, 0)
@@ -274,7 +379,7 @@ def build_window(width, height):
 
     def on_destroy(_win):
         global _flutter
-        print(f"\n{YELLOW}Stopping Flutter...{RESET}")
+        print(f"{_ts()}  {YELLOW}BYE{RESET}  stopping flutter...")
         with _flutter_lock:
             if _flutter and _flutter.poll() is None:
                 _flutter.terminate()
@@ -283,106 +388,84 @@ def build_window(width, height):
                 except subprocess.TimeoutExpired:
                     _flutter.kill()
                     _flutter.wait()
-        print(f"{GREEN}Done.{RESET}")
+        print(f"{_ts()}  {GREEN}BYE{RESET}  done")
         Gtk.main_quit()
 
     win.connect("destroy", on_destroy)
-
     _window  = win
     _webview = webview
     return win, webview
 
 def on_size_change(width, height, name):
     if _window:
-        print(f"{YELLOW}Resizing to {name} ({width}x{height}){RESET}")
+        print(f"{_ts()}  {CYAN}WIN{RESET}  {name} ({width}x{height})")
         _window.resize(width, height)
 
 # ── main ──────────────────────────────────────────────────────────────────────
 def main():
-    parser = argparse.ArgumentParser(
-        prog="flutterff",
-        description="Flutter web dev in a native window with custom header bar.",
-    )
+    parser = argparse.ArgumentParser(prog="flutterff")
     parser.add_argument("--port", "-p", type=int, default=8080)
-    parser.add_argument("--no-hot", action="store_true")
+    parser.add_argument("--no-hot",  action="store_true")
     parser.add_argument("--profile", action="store_true")
-    parser.add_argument("--flavor", type=str, default=None)
-    parser.add_argument("--size", "-s", type=str, default="mobile")
+    parser.add_argument("--flavor",  type=str, default=None)
+    parser.add_argument("--size",  "-s", type=str, default="mobile")
     parser.add_argument("--list-sizes", action="store_true")
-    parser.add_argument("--version", action="store_true")
-    parser.add_argument("--offline", action="store_true",
-                        help="Skip pub.dev checks — use cached packages only")
+    parser.add_argument("--version",    action="store_true")
+    parser.add_argument("--offline",    action="store_true")
     args = parser.parse_args()
 
     if args.version:
-        print(f"flutterff v{VERSION}")
-        sys.exit(0)
+        print(f"flutterff v{VERSION}"); sys.exit(0)
 
     if args.list_sizes:
-        print(f"\n{BOLD}Available size presets:{RESET}")
+        print(f"\n{BOLD}size presets{RESET}")
+        print(f"{DIM}{'─'*30}{RESET}")
         for name, (w, h) in DEVICE_PRESETS.items():
-            tag = "  ← default" if name == "mobile" else ""
+            tag = f"  {DIM}default{RESET}" if name == "mobile" else ""
             print(f"  {CYAN}{name:<15}{RESET} {w}x{h}{tag}")
-        print(f"\n  {CYAN}custom{RESET}          e.g. --size 430x932\n")
+        print(f"  {CYAN}{'custom':<15}{RESET} e.g. --size 430x932")
+        print()
         sys.exit(0)
 
-    if args.size in DEVICE_PRESETS:
-        width, height = DEVICE_PRESETS[args.size]
-    else:
-        width, height = parse_size(args.size)
+    width, height = DEVICE_PRESETS.get(args.size) or parse_size(args.size)
 
-    # ── port resolution ────────────────────────────────────────────────────────
     port = args.port
     if not is_port_free(port):
         free = find_free_port(port + 1)
-        print(f"{YELLOW}Port {port} is in use — using {free} instead{RESET}")
         port = free
 
-    # ── offline detection ──────────────────────────────────────────────────────
     offline = args.offline
     if not offline:
-        print(f"{YELLOW}Checking connectivity...{RESET}", end=" ", flush=True)
         if check_online():
-            print(f"{GREEN}online{RESET}")
+            pass  # online, continue
         else:
-            print(f"{YELLOW}offline{RESET}")
             offline = True
 
-    # ── build flutter command ──────────────────────────────────────────────────
     flutter_cmd = [
-        "flutter", "run",
-        "-d", "web-server",
+        "flutter", "run", "-d", "web-server",
         f"--web-port={port}",
     ]
-    if args.profile:
-        flutter_cmd.append("--profile")
-    if args.no_hot:
-        flutter_cmd.append("--no-hot")
-    if args.flavor:
-        flutter_cmd += ["--flavor", args.flavor]
-    if offline:
-        flutter_cmd.append("--no-pub")
-        # Flutter 3.29+ removed HTML renderer — only CanvasKit remains
-        # --no-web-resources-cdn stops Flutter fetching CanvasKit from CDN
-        # so it uses the locally cached copy bundled with the Flutter SDK instead
-        flutter_cmd.append("--no-web-resources-cdn")
+    if args.profile: flutter_cmd.append("--profile")
+    if args.no_hot:  flutter_cmd.append("--no-hot")
+    if args.flavor:  flutter_cmd += ["--flavor", args.flavor]
+    if offline:      flutter_cmd += ["--no-pub", "--no-web-resources-cdn"]
 
-    # ── startup info ───────────────────────────────────────────────────────────
-    print(f"\n{BOLD}{CYAN}🦊 flutterff v{VERSION}{RESET}")
-    print(f"{YELLOW}Size:{RESET}       {width}x{height}  ({args.size if args.size in DEVICE_PRESETS else 'custom'})")
-    print(f"{YELLOW}Port:{RESET}       {port}")
-    print(f"{YELLOW}Mode:{RESET}       {'profile' if args.profile else 'debug (web-server)'}")
-    print(f"{YELLOW}Hot reload:{RESET} {'disabled' if args.no_hot else 'enabled — button or r in terminal'}")
-    print(f"{YELLOW}Network:{RESET}    {'⚠ offline — skipping pub' if offline else '✔ online'}")
-    print(f"\n{YELLOW}Starting Flutter...{RESET}\n")
+    # ── startup header ─────────────────────────────────────────────────────────
+    size_label = args.size if args.size in DEVICE_PRESETS else "custom"
+    print(f"\n{BOLD}flutterff{RESET} {DIM}v{VERSION}{RESET}")
+    print(f"{DIM}{'─'*30}{RESET}")
+    print(f"  {DIM}size{RESET}   {width}\u00d7{height}  {DIM}{size_label}{RESET}")
+    print(f"  {DIM}port{RESET}   {port}")
+    print(f"  {DIM}mode{RESET}   {'profile' if args.profile else 'debug'}")
+    print(f"  {DIM}net{RESET}    {'offline' if offline else 'online'}")
+    print(f"{DIM}{'─'*30}{RESET}")
+    print(f"\n{DIM}  time      tag  message{RESET}")
+    print(f"{DIM}{'─'*30}{RESET}\n")
 
     build_window(width, height)
-
-    t = threading.Thread(target=run_flutter, args=(flutter_cmd, port), daemon=True)
-    t.start()
-
+    threading.Thread(
+        target=run_flutter, args=(flutter_cmd, port), daemon=True).start()
     signal.signal(signal.SIGINT, lambda *a: GLib.idle_add(quit_gtk))
-
     Gtk.main()
 
 if __name__ == "__main__":

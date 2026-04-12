@@ -50,7 +50,7 @@ RESET  = "\033[0m"
 BOLD   = "\033[1m"
 DIM    = "\033[2m"
 
-VERSION = "1.9.0"
+VERSION = "2.0.0"
 
 DEVICE_PRESETS: Dict[str, Tuple[int, int]] = {
     "mobile":       (412, 915),
@@ -316,7 +316,7 @@ def build_window(width: int, height: int):
     # Hot reload button (⚡)
     reload_btn = Gtk.Button()
     reload_lbl = Gtk.Label()
-    reload_lbl.set_markup("<span size='large'>⚡</span>")
+    reload_lbl.set_markup("<span size='large'>🗲</span>")
     reload_btn.add(reload_lbl)
     reload_btn.set_tooltip_text("Hot Reload (r)")
     reload_btn.connect("clicked", lambda btn: on_hot_reload(btn))
@@ -432,7 +432,7 @@ def main():
     args = parser.parse_args()
 
     if args.version:
-        print(f"flutterff v{VERSION}")
+        print(f"🦊flutterff v{VERSION}")
         sys.exit(0)
 
     if args.list_sizes:

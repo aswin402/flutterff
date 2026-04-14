@@ -1,6 +1,6 @@
 # flutterff 🦊
 
-![flutterff logo](asset/logo.png)
+<img src="asset/logo.png" width="200" alt="Zed File Drop Logo">
 
 **The lightweight, native mobile-first launcher for Flutter web development on Linux.**
 

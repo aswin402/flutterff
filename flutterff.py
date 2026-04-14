@@ -52,7 +52,7 @@ RESET  = "\033[0m"
 BOLD   = "\033[1m"
 DIM    = "\033[2m"
 
-VERSION = "2.2.0"
+VERSION = "2.4.0"
 
 DEVICE_PRESETS: Dict[str, Tuple[int, int]] = {
     "mobile":       (412, 915),
@@ -130,7 +130,10 @@ def format_flutter_log(raw: str, source: str = "flutter") -> Optional[str]:
 
 # ── screenshot ────────────────────────────────────────────────────────────────
 def take_screenshot():
-    """Capture the webview using WebKit2 snapshot API — gets actual rendered content."""
+    """Capture the webview using GTK/Cairo.
+    This guarantees we read exactly what is rendered, bypassing WebKit internal
+    snapshot bugs on resize and Wayland window grab issues.
+    """
     if not _webview:
         print(f"{_ts()}  {RED}ERR{RESET}  no webview available")
         return
@@ -141,35 +144,38 @@ def take_screenshot():
     fname = datetime.now().strftime("screenshot_%Y%m%d_%H%M%S.png")
     fpath = os.path.join(shots_dir, fname)
 
-    def _on_snapshot(webview, result):
+    def _do_capture():
         try:
-            # get_snapshot returns a cairo.Surface
-            surface = webview.get_snapshot_finish(result)
-            if surface is None:
-                print(f"{_ts()}  {RED}ERR{RESET}  snapshot returned nothing")
-                return
+            import cairo
+        except ImportError:
+            print(f"{_ts()}  {RED}ERR{RESET}  python3-cairo required for screenshots")
+            return False
 
-            # convert cairo surface → GdkPixbuf
-            w = surface.get_width()
-            h = surface.get_height()
-            pixbuf = Gdk.pixbuf_get_from_surface(surface, 0, 0, w, h)
-            if pixbuf is None:
-                print(f"{_ts()}  {RED}ERR{RESET}  could not convert surface to pixbuf")
-                return
+        try:
+            alloc = _webview.get_allocation()
+            w, h = alloc.width, alloc.height
+            if w <= 0 or h <= 0:
+                print(f"{_ts()}  {RED}ERR{RESET}  invalid webview size")
+                return False
 
-            pixbuf.savev(fpath, "png", [], [])
-            print(f"{_ts()}  {GREEN}SCR{RESET}  saved \u2192 screenshots/{fname}  ({w}x{h})")
+            surface = cairo.ImageSurface(cairo.FORMAT_ARGB32, w, h)
+            cr = cairo.Context(surface)
+            _webview.draw(cr)
+            
+            surface.write_to_png(fpath)
+            print(f"{_ts()}  {GREEN}SCR{RESET}  saved → screenshots/{fname}  ({w}x{h})")
         except Exception as e:
             print(f"{_ts()}  {RED}ERR{RESET}  screenshot failed: {e}")
 
-    # WebKit2.SnapshotRegion.VISIBLE — captures exactly what is visible in the webview
-    # WebKit2.SnapshotOptions.NONE   — no special options, just the rendered content
-    _webview.get_snapshot(
-        WebKit2.SnapshotRegion.VISIBLE,
-        WebKit2.SnapshotOptions.NONE,
-        None,          # cancellable
-        _on_snapshot,  # callback
-    )
+        return False
+
+    def _queue_capture():
+        # Flush pending GTK redraws first, then capture
+        _webview.queue_draw()
+        GLib.timeout_add(300, _do_capture)
+        return False
+
+    GLib.idle_add(_queue_capture)
 
 # ── helpers ───────────────────────────────────────────────────────────────────
 def parse_size(size_str: str) -> Tuple[int, int]:
@@ -447,6 +453,16 @@ def on_size_change(width: int, height: int, name: str):
     if _window:
         print(f"{_ts()}  {CYAN}WIN{RESET}  {name} ({width}x{height})")
         _window.resize(width, height)
+        
+        # Force webview to update its layout
+        if _webview:
+            # Queue a resize event
+            _webview.queue_resize()
+            # Force a redraw after the resize
+            def force_redraw():
+                _webview.queue_draw()
+                return False
+            GLib.timeout_add(100, force_redraw)
 
 # ── main ──────────────────────────────────────────────────────────────────────
 def main():

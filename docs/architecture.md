@@ -51,3 +51,22 @@ When you press `r` or click the lightning bolt:
 - **Custom User Agent**: Specifically set up for mobile simulation.
 - **WebKit Settings**: Development extras (Right Check > Inspect) are enabled by default for debugging.
 - **Cache Management**: Uses the `DOCUMENT_VIEWER` cache model to keep RAM usage low.
+## 6. The Screenshot Engine (v2.7.0)
+
+Capturing a high-resolution, pixel-perfect screenshot from a native WebKit view is complex due to GPU compositing and windowing system differences. `flutterff` v2.7.0 uses a **3-tier hierarchical fallback strategy**:
+
+1.  **GDK Capture (X11 Primary)**: 
+    - Uses `Gdk.pixbuf_get_from_window` to read the live X11 framebuffer.
+    - **Pros**: Reflects the exact pixels on the screen; zero latency.
+    - **Cons**: Fails on Wayland.
+2.  **WebKit Snapshot API (Wayland Primary)**:
+    - Calls the native `get_snapshot` WebKit API.
+    - **Pros**: Works on Wayland; captures the specific view region even if obscured.
+    - **Cons**: Can occasionally return "blank" (stale) chunks on larger viewports.
+3.  **Cairo Surface Draw (Robust Fallback)**:
+    - Manually creates a `cairo.ImageSurface` and forces the WebView to `draw()` into it.
+    - **Pros**: Extremely reliable; avoids GPU-to-CPU copies that can fail.
+
+### Reliability Features
+- **Blank Frame Detection**: Every capture is analyzed (size thresholding). If it appears blank, the system automatically retries or falls back to the next method.
+- **Queueing / Settle Delay**: Ensures the window is "realized" and the last paint cycle is complete before reading the buffer.

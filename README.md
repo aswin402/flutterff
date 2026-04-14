@@ -16,7 +16,7 @@
 - 📱 **Mobile First**: Built-in device presets (iPhone, Android, Tablet) with one-click switching.
 - 🔥 **Hot Reload/Restart**: Native header bar controls and terminal shortcuts for instant updates.
 - 🦊 **Native Focus**: Draggable header bar, standard window controls, and desktop integration.
-- 📸 **Built-in Screenshots**: Capture pixel-perfect mobile screenshots directly to your workspace.
+- 📸 **Rock-Solid Screenshots (v2.7.0)**: New 3-tier capture engine (GDK/WebKit/Cairo) ensures pixel-perfect shots across any screen size on both X11 and Wayland.
 - 🌐 **Offline Mode**: Develop without internet reliance using `--offline`.
 
 ## 🚀 Quick Start

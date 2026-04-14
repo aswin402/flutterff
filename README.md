@@ -1,61 +1,51 @@
-# flutterff
+# flutterff 🦊
 
 ![flutterff logo](asset/logo.png)
 
-**Lightweight native Flutter web development launcher for Linux**
-
-`v2.2.0`
+**The lightweight, native mobile-first launcher for Flutter web development on Linux.**
 
 ---
 
-**flutterff** is a minimal, borderless web development launcher designed specifically for Flutter developers. It uses **GTK 3** and **WebKit2** directly, bypassing the heavy overhead of Chromium-based browsers, while providing a modern mobile-first preview experience.
+`flutterff` (Flutter Fast Forward) is a minimal, borderless development container for Flutter web applications. It uses **GTK 3** and **WebKit2** directly to provide a high-performance, mobile-first preview experience without the overhead of a full browser.
 
-## ✨ Features (v2.2.0)
-- 🦊 **Native Header Bar**: Custom draggable bar for window management.
-- ❌ **Native Close Button**: Standard window controls for a desktop feel.
-- 📱 **Integrated Size Selector**: Change device sizes (Mobile, iPhone, Tablet) instantly via a dropdown menu.
-- 🚀 **Performance**: Extremely low RAM usage compared to a full browser.
-- ⚡ **Hot Reload & Restart**: Dedicated header bar buttons for instant updates.
-- 🛠️ **Flutter Focused**: Auto-loads your Flutter web server and handles common development ports.
-- 🗔 **Draggable & Resizable**: Move the window anywhere; change sizes on the fly.
+![Screenshot](screenshots/image.png)
 
-# Images
+## ✨ Core Features
 
-![image](screenshots/image.png)
-![resizemenu](screenshots/resizemenu.png)
+- ⚡ **Lightning Fast**: Near-instant startup and extremely low RAM footprint.
+- 📱 **Mobile First**: Built-in device presets (iPhone, Android, Tablet) with one-click switching.
+- 🔥 **Hot Reload/Restart**: Native header bar controls and terminal shortcuts for instant updates.
+- 🦊 **Native Focus**: Draggable header bar, standard window controls, and desktop integration.
+- 📸 **Built-in Screenshots**: Capture pixel-perfect mobile screenshots directly to your workspace.
+- 🌐 **Offline Mode**: Develop without internet reliance using `--offline`.
 
-## 🛠️ Prerequisites
-Before running `flutterff`, ensure you have the necessary GTK and WebKit libraries installed:
+## 🚀 Quick Start
 
+Ensure you have the system dependencies:
 ```bash
-sudo apt update
 sudo apt install python3-gi gir1.2-gtk-3.0 gir1.2-webkit2-4.1
 ```
 
-## 🚀 Installation & Update
-Run the following script in the project directory to install or update your global `flutterff` command:
-
+Install `flutterff` globally (installs to `~/.local/bin`):
 ```bash
-bash update.sh
+bash setup.sh
 ```
 
-## 📖 Usage
+Run inside any Flutter project:
 ```bash
-flutterff                  # 412x915 default mobile (Pixel 7 Pro)
-flutterff --size iphone    # iPhone 14 size
-flutterff --size 360x800   # Custom mobile size
-flutterff --list-sizes     # See all presets
-flutterff --port 3000      # Use a custom development port
-flutterff --profile        # Run in Flutter profile mode
+flutterff
 ```
 
-## ⌨️ Shortcuts & Controls
-- **Drag**: Click and drag the header bar at the top.
-- **Resize**: Click the "Maximize" icon in the header bar to pick a new size.
-- **Exit**: Click the Close (X) button or press `Ctrl + C` in your terminal.
-- ⚡ **Hot Reload**: Press `r` in the terminal or click the lightning bolt in the header bar.
-- 🔄 **Hot Restart**: Press `R` in the terminal or click the refresh icon in the header bar.
+## 📖 Documentation
+
+Explore the detailed documentation:
+
+- **[Installation Guide](docs/installation.md)**: How to set up and update the tool.
+- **[Usage & Shortcuts](docs/usage.md)**: Command-line flags and interactive controls.
+- **[Architecture](docs/architecture.md)**: How the tool works under the hood.
+- **[Modifying Presets](docs/modification.md)**: Adding your own device sizes.
+- **[Examples](docs/examples.md)**: Practical workflows and command examples.
 
 ---
 
-_Made for Flutter developers who value performance and desktop integration._
+_Made for Flutter developers who value performance and a native Linux workflow._

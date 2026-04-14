@@ -1,7 +1,7 @@
 [project]
 name = "flutterff"
 version = "2.2.0"
-description = "Add your description here"
+description = "Lightweight native Flutter web development launcher for Linux"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [

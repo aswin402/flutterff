@@ -23,6 +23,7 @@ import threading
 import argparse
 import signal
 import socket
+import os
 from datetime import datetime
 from typing import Optional, Tuple, Dict, Any
 import time
@@ -34,7 +35,8 @@ try:
     except ValueError:
         gi.require_version("WebKit2", "4.0")
     gi.require_version("Gtk", "3.0")
-    from gi.repository import Gtk, WebKit2, GLib
+    gi.require_version("Gdk", "3.0")
+    from gi.repository import Gtk, WebKit2, GLib, Gdk, GdkPixbuf
 except ImportError:
     print("\n[flutterff] python3-gi or WebKit2 not found.")
     print("Run:  sudo apt install python3-gi gir1.2-gtk-3.0 gir1.2-webkit2-4.1\n")
@@ -50,7 +52,7 @@ RESET  = "\033[0m"
 BOLD   = "\033[1m"
 DIM    = "\033[2m"
 
-VERSION = "2.0.0"
+VERSION = "2.2.0"
 
 DEVICE_PRESETS: Dict[str, Tuple[int, int]] = {
     "mobile":       (412, 915),
@@ -60,13 +62,14 @@ DEVICE_PRESETS: Dict[str, Tuple[int, int]] = {
     "desktop":      (1280, 800),
 }
 
-_flutter: Optional[subprocess.Popen] = None
-_window: Optional[Gtk.Window] = None
-_webview: Optional[WebKit2.WebView] = None
-_current_url: Optional[str] = None
-_flutter_lock = threading.Lock()
-_pending_url: Optional[str] = None
-_pending_lock = threading.Lock()
+_flutter:      Optional[subprocess.Popen] = None
+_window:       Optional[Gtk.Window]       = None
+_webview:      Optional[WebKit2.WebView]  = None
+_current_url:  Optional[str]              = None
+_flutter_lock  = threading.Lock()
+_pending_url:  Optional[str]              = None
+_pending_lock  = threading.Lock()
+_project_root: str                        = os.getcwd()
 
 _ANSI = re.compile(r'\x1b\[[0-9;]*m')
 
@@ -77,11 +80,10 @@ def _ts() -> str:
     return datetime.now().strftime("%H:%M:%S")
 
 def any_in(text: str, patterns: list) -> bool:
-    """Check if any pattern exists in text"""
     lo = text.lower()
     return any(p in lo for p in patterns)
 
-# ── log levels ─────────────────────────────────────────────────────────────────
+# ── log levels ────────────────────────────────────────────────────────────────
 def _detect_level(text: str) -> Tuple[str, str]:
     lo = text.lower()
     if any_in(lo, ["error:", "exception:", "fatal:", "unhandled"]):
@@ -94,12 +96,6 @@ def _detect_level(text: str) -> Tuple[str, str]:
         return "INF", BLUE
 
 def format_flutter_log(raw: str, source: str = "flutter") -> Optional[str]:
-    """
-    Ultra-clean logging:
-    - ONLY show Flutter logs
-    - Kill ALL browser/WebKit noise
-    """
-    # 🔥 HARD KILL (raw, before processing)
     lo_raw = raw.lower()
     if any_in(lo_raw, [
         "http://", "https://", ".js:", "console",
@@ -115,26 +111,65 @@ def format_flutter_log(raw: str, source: str = "flutter") -> Optional[str]:
     lo = text.lower()
     ts = _ts()
 
-    # ✅ ONLY Flutter logs
     if "flutter:" in lo:
         parts = re.split(r'flutter:\s*', text, flags=re.IGNORECASE)
         msg = parts[-1].strip() if len(parts) > 1 else text
         if not msg:
             return None
-
         tag, color = _detect_level(msg)
         return f"{ts}  {color}{tag}{RESET}  {msg}"
 
-    # ✅ webview JS logs (direct print() from user)
     if source == "webview":
         tag, color = _detect_level(text)
         return f"{ts}  {color}{tag}{RESET}  {text}"
 
-    # ✅ errors (optional keep)
     if any_in(lo, ["error:", "exception:", "fatal:", "══╡", "══╞"]):
         return f"{ts}  {RED}ERR{RESET}  {text}"
 
     return None
+
+# ── screenshot ────────────────────────────────────────────────────────────────
+def take_screenshot():
+    """Capture the webview using WebKit2 snapshot API — gets actual rendered content."""
+    if not _webview:
+        print(f"{_ts()}  {RED}ERR{RESET}  no webview available")
+        return
+
+    shots_dir = os.path.join(_project_root, "screenshots")
+    os.makedirs(shots_dir, exist_ok=True)
+
+    fname = datetime.now().strftime("screenshot_%Y%m%d_%H%M%S.png")
+    fpath = os.path.join(shots_dir, fname)
+
+    def _on_snapshot(webview, result):
+        try:
+            # get_snapshot returns a cairo.Surface
+            surface = webview.get_snapshot_finish(result)
+            if surface is None:
+                print(f"{_ts()}  {RED}ERR{RESET}  snapshot returned nothing")
+                return
+
+            # convert cairo surface → GdkPixbuf
+            w = surface.get_width()
+            h = surface.get_height()
+            pixbuf = Gdk.pixbuf_get_from_surface(surface, 0, 0, w, h)
+            if pixbuf is None:
+                print(f"{_ts()}  {RED}ERR{RESET}  could not convert surface to pixbuf")
+                return
+
+            pixbuf.savev(fpath, "png", [], [])
+            print(f"{_ts()}  {GREEN}SCR{RESET}  saved \u2192 screenshots/{fname}  ({w}x{h})")
+        except Exception as e:
+            print(f"{_ts()}  {RED}ERR{RESET}  screenshot failed: {e}")
+
+    # WebKit2.SnapshotRegion.VISIBLE — captures exactly what is visible in the webview
+    # WebKit2.SnapshotOptions.NONE   — no special options, just the rendered content
+    _webview.get_snapshot(
+        WebKit2.SnapshotRegion.VISIBLE,
+        WebKit2.SnapshotOptions.NONE,
+        None,          # cancellable
+        _on_snapshot,  # callback
+    )
 
 # ── helpers ───────────────────────────────────────────────────────────────────
 def parse_size(size_str: str) -> Tuple[int, int]:
@@ -182,10 +217,8 @@ def load_url_in_gtk(url: str) -> bool:
     global _current_url
     _current_url = url
     if _webview:
-        # Try to load URL with retries
         def attempt_load(remaining: int):
             try:
-                # Check if port is ready
                 port = int(url.split(":")[2].split("/")[0])
                 s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                 s.settimeout(1)
@@ -263,7 +296,6 @@ def run_flutter(cmd: list, port: int):
     threading.Thread(target=_read_stderr, args=(_flutter,), daemon=True).start()
 
     for line in _flutter.stdout:
-        # URL detection before formatting
         if not url_sent:
             match = lib_pattern.search(line)
             found_url = match.group(1) if match else None
@@ -274,7 +306,6 @@ def run_flutter(cmd: list, port: int):
             if found_url:
                 url_sent = True
                 GLib.idle_add(load_url_in_gtk, found_url)
-                # Don't continue here - still process the log line
 
         out = format_flutter_log(line)
         if out:
@@ -298,7 +329,7 @@ def build_window(width: int, height: int):
     hb.set_decoration_layout("menu:close")
     win.set_titlebar(hb)
 
-    # Size selector
+    # ── size selector ──────────────────────────────────────────────────────────
     size_btn = Gtk.MenuButton()
     size_btn.set_image(
         Gtk.Image.new_from_icon_name("view-fullscreen-symbolic", Gtk.IconSize.MENU))
@@ -313,16 +344,24 @@ def build_window(width: int, height: int):
     size_btn.set_popup(menu)
     hb.pack_start(size_btn)
 
-    # Hot reload button (⚡)
+    # ── screenshot button ──────────────────────────────────────────────────────
+    shot_btn = Gtk.Button()
+    shot_btn.set_image(
+        Gtk.Image.new_from_icon_name("camera-photo-symbolic", Gtk.IconSize.MENU))
+    shot_btn.set_tooltip_text("Screenshot (screenshots/)")
+    shot_btn.connect("clicked", lambda _: take_screenshot())
+    hb.pack_start(shot_btn)
+
+    # ── hot reload ⚡ ──────────────────────────────────────────────────────────
     reload_btn = Gtk.Button()
     reload_lbl = Gtk.Label()
-    reload_lbl.set_markup("<span size='large'>🗲</span>")
+    reload_lbl.set_markup("<span>🗲</span>")
     reload_btn.add(reload_lbl)
     reload_btn.set_tooltip_text("Hot Reload (r)")
     reload_btn.connect("clicked", lambda btn: on_hot_reload(btn))
     hb.pack_end(reload_btn)
 
-    # Hot restart button
+    # ── hot restart ────────────────────────────────────────────────────────────
     restart_btn = Gtk.Button()
     restart_btn.set_image(
         Gtk.Image.new_from_icon_name("view-refresh-symbolic", Gtk.IconSize.MENU))
@@ -330,19 +369,17 @@ def build_window(width: int, height: int):
     restart_btn.connect("clicked", lambda btn: on_hot_restart(btn))
     hb.pack_end(restart_btn)
 
-    # WebView setup
+    # ── webview ────────────────────────────────────────────────────────────────
     context = WebKit2.WebContext.get_default()
     context.set_cache_model(WebKit2.CacheModel.DOCUMENT_VIEWER)
     settings = WebKit2.Settings()
     settings.set_enable_write_console_messages_to_stdout(False)
     settings.set_enable_developer_extras(True)
 
-    # User content manager for console messages
     manager = WebKit2.UserContentManager()
     manager.register_script_message_handler("flutterLog")
 
     def on_script_message(_manager, js_result):
-        """Handle console messages from injected JS"""
         try:
             msg = js_result.get_js_value().to_string()
             if msg:
@@ -353,28 +390,21 @@ def build_window(width: int, height: int):
             pass
 
     manager.connect("script-message-received::flutterLog", on_script_message)
-
-    # Inject JS to capture console output
-    console_script = WebKit2.UserScript(
-        """
-        (function() {
-            ['log', 'warn', 'error', 'info', 'debug'].forEach(function(level) {
-                var orig = console[level];
-                console[level] = function() {
-                    var msg = Array.prototype.slice.call(arguments).join(' ');
-                    try {
-                        window.webkit.messageHandlers.flutterLog.postMessage(msg);
-                    } catch(e) {}
-                    orig.apply(console, arguments);
+    manager.add_script(WebKit2.UserScript(
+        """(function(){
+            ['log','warn','error','info','debug'].forEach(function(l){
+                var o=console[l];
+                console[l]=function(){
+                    var m=Array.prototype.slice.call(arguments).join(' ');
+                    try{window.webkit.messageHandlers.flutterLog.postMessage(m);}catch(e){}
+                    o.apply(console,arguments);
                 };
             });
-        })();
-        """,
+        })();""",
         WebKit2.UserContentInjectedFrames.ALL_FRAMES,
         WebKit2.UserScriptInjectionTime.START,
         None, None
-    )
-    manager.add_script(console_script)
+    ))
 
     webview = WebKit2.WebView.new_with_user_content_manager(manager)
     webview.set_settings(settings)
@@ -401,7 +431,7 @@ def build_window(width: int, height: int):
         Gtk.main_quit()
 
     win.connect("destroy", on_destroy)
-    _window = win
+    _window  = win
     _webview = webview
     return win, webview
 
@@ -420,20 +450,22 @@ def on_size_change(width: int, height: int, name: str):
 
 # ── main ──────────────────────────────────────────────────────────────────────
 def main():
+    global _project_root
+    _project_root = os.getcwd()
+
     parser = argparse.ArgumentParser(prog="flutterff")
-    parser.add_argument("--port", "-p", type=int, default=8080)
-    parser.add_argument("--no-hot", action="store_true")
-    parser.add_argument("--profile", action="store_true")
-    parser.add_argument("--flavor", type=str, default=None)
-    parser.add_argument("--size", "-s", type=str, default="mobile")
+    parser.add_argument("--port",       "-p", type=int, default=8080)
+    parser.add_argument("--no-hot",     action="store_true")
+    parser.add_argument("--profile",    action="store_true")
+    parser.add_argument("--flavor",     type=str, default=None)
+    parser.add_argument("--size",       "-s", type=str, default="mobile")
     parser.add_argument("--list-sizes", action="store_true")
-    parser.add_argument("--version", action="store_true")
-    parser.add_argument("--offline", action="store_true")
+    parser.add_argument("--version",    action="store_true")
+    parser.add_argument("--offline",    action="store_true")
     args = parser.parse_args()
 
     if args.version:
-        print(f"🦊flutterff v{VERSION}")
-        sys.exit(0)
+        print(f"🦊flutterff v{VERSION}"); sys.exit(0)
 
     if args.list_sizes:
         print(f"\n{BOLD}size presets{RESET}")
@@ -441,11 +473,9 @@ def main():
         for name, (w, h) in DEVICE_PRESETS.items():
             tag = f"  {DIM}default{RESET}" if name == "mobile" else ""
             print(f"  {CYAN}{name:<15}{RESET} {w}x{h}{tag}")
-        print(f"  {CYAN}{'custom':<15}{RESET} e.g. --size 430x932")
-        print()
+        print(f"  {CYAN}{'custom':<15}{RESET} e.g. --size 430x932\n")
         sys.exit(0)
 
-    # Get dimensions
     if args.size in DEVICE_PRESETS:
         width, height = DEVICE_PRESETS[args.size]
         size_label = args.size
@@ -453,49 +483,38 @@ def main():
         width, height = parse_size(args.size)
         size_label = "custom"
 
-    # Port handling
     port = args.port
     if not is_port_free(port):
         free_port = find_free_port(port + 1)
-        print(f"{YELLOW}Port {port} in use, using {free_port}{RESET}")
+        print(f"{YELLOW}WRN{RESET}  port {port} in use \u2192 {free_port}")
         port = free_port
 
-    # Network check
     offline = args.offline
     if not offline:
-        print(f"{YELLOW}Checking connectivity...{RESET} ", end="", flush=True)
+        print(f"{DIM}checking connectivity...{RESET} ", end="", flush=True)
         if check_online():
             print(f"{GREEN}online{RESET}")
         else:
             print(f"{YELLOW}offline{RESET}")
             offline = True
 
-    # Build flutter command
-    flutter_cmd = [
-        "flutter", "run", "-d", "web-server",
-        f"--web-port={port}",
-    ]
-    if args.profile:
-        flutter_cmd.append("--profile")
-    if args.no_hot:
-        flutter_cmd.append("--no-hot")
-    if args.flavor:
-        flutter_cmd += ["--flavor", args.flavor]
-    if offline:
-        flutter_cmd += ["--no-pub", "--no-web-resources-cdn"]
+    flutter_cmd = ["flutter", "run", "-d", "web-server", f"--web-port={port}"]
+    if args.profile: flutter_cmd.append("--profile")
+    if args.no_hot:  flutter_cmd.append("--no-hot")
+    if args.flavor:  flutter_cmd += ["--flavor", args.flavor]
+    if offline:      flutter_cmd += ["--no-pub", "--no-web-resources-cdn"]
 
-    # ── startup header ─────────────────────────────────────────────────────────
     print(f"\n{BOLD}flutterff{RESET} {DIM}v{VERSION}{RESET}")
     print(f"{DIM}{'─'*30}{RESET}")
     print(f"  {DIM}size{RESET}   {width}\u00d7{height}  {DIM}{size_label}{RESET}")
     print(f"  {DIM}port{RESET}   {port}")
     print(f"  {DIM}mode{RESET}   {'profile' if args.profile else 'debug'}")
     print(f"  {DIM}net{RESET}    {'offline' if offline else 'online'}")
+    print(f"  {DIM}shots{RESET}  {_project_root}/screenshots/")
     print(f"{DIM}{'─'*30}{RESET}")
     print(f"\n{DIM}  time      tag  message{RESET}")
     print(f"{DIM}{'─'*30}{RESET}\n")
 
-    # Initialize GTK and start
     build_window(width, height)
     threading.Thread(target=run_flutter, args=(flutter_cmd, port), daemon=True).start()
     signal.signal(signal.SIGINT, lambda *a: GLib.idle_add(quit_gtk))

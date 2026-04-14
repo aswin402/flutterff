@@ -4,13 +4,13 @@
 
 **Lightweight native Flutter web development launcher for Linux**
 
-`v1.5.0`
+`v2.2.0`
 
 ---
 
 **flutterff** is a minimal, borderless web development launcher designed specifically for Flutter developers. It uses **GTK 3** and **WebKit2** directly, bypassing the heavy overhead of Chromium-based browsers, while providing a modern mobile-first preview experience.
 
-## ✨ Features (v1.1.0)
+## ✨ Features (v2.2.0)
 - 🦊 **Native Header Bar**: Custom draggable bar for window management.
 - ❌ **Native Close Button**: Standard window controls for a desktop feel.
 - 📱 **Integrated Size Selector**: Change device sizes (Mobile, iPhone, Tablet) instantly via a dropdown menu.
